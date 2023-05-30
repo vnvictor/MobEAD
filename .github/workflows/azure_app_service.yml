@@ -1,0 +1,77 @@
+name: 'Pipeline Azure Web App com container'
+
+on:
+
+    push:
+        branches:
+            -main
+    
+    pull_request:
+
+env:
+    IMAGE_NAME: appmobead01
+
+jobs:
+    valida-conteudo-docker:
+        name: 'test'
+        runs-on: ubuntu-latest
+        
+        steps:
+            - name: checkout
+              uses: actions/checkout@v2
+            - name: Run tests
+              run: |
+                if [ -f docker-compose.test.yml ]; then
+                    docker-compose --file docker-compose.test.yml build
+                    docker-compose --file docker-compose.test.yml run sut
+                else
+                    docker build . --file Dockerfile
+                fi
+    push-image-docker:
+        needs: valida-conteudo-docker
+        runs-on: ubuntu-latest
+        if: github.event_name == 'push'
+        steps:
+            - uses: actions/checkout@v2
+            - name: build image 
+              run: docker build . --file Dockerfile --tag $IMAGE_NAME
+            - name: Log int registry
+              run: echo "${{secrets.GITHUB_TOKEN}}" | docker login -u ${{secrets.DOCKER_REGISTRY_USER}} -p ${{secrets.DOCKER_REGISTRY_PASSWORD}}
+            - name: Push image
+              run: |
+                IMAGE_ID=vnvictor/$IMAGE_NAME
+
+                # Change all upsercase to lowercase
+                IMAGE_ID=$(echo $IMAGE_ID | tr '[A-Z]' '[a-z]')
+
+                # Strip git ref prefix from version
+                VERSION=$(echo "${{ github.ref }}" | sed -e 's,.*/\(.*\),\1,')
+
+                # Strip 'v' prefix from tag name
+                [[ "{{ github.ref }}" == "refs/tags/"* ]] && VERSION=$(echo $VERSION | sed -e 's/^v//')
+
+                # Use docker latest tag convention
+                [ "$VERSION" == "$default-branch" ] && VERSION=latest
+
+                echo IMAGE_ID=$IMAGE_ID
+                echo VERSION=$VERSION
+
+                docker tag $IMAGE_NAME $IMAGE_ID:$VERSION
+                docker push $IMAGE_ID:$VERSION
+
+    deploy-app-service-docker:
+        needs: push-image-docker
+        runs-on: ubuntu-latest
+        container: microsoft/azure-cli
+
+        steps:
+          - name: 'Deploy to Azure webApp'
+            run: |
+                az login --service-principal --username e5328bbc-7e03-4f27-a5df-0323a0cafa6d --password QGN8Q~iXU-N-xLu1iju~XdeWi5-BxGqd.UM5ebko --tenant 607fd72a-2f9b-4d6a-9aa5-86c73c0e2f26
+                az account show
+                az account -set -s 54dc9825-2d8b-4b9d-9ff3-76edc0529329
+                az appservice plan create --name AppSvc-DockerTutorial-plan --resource-group DevOps-rg --is-linux
+                az webapp create --resource-group DevOps-rg --plan AppSvc-DockerTutorial-plan --name victorwebapp1 --deployment-container-image-name vnvictor/appmobead01
+                az webapp show --name victorwebapp1 --resource-group DevOps-rg
+
+
